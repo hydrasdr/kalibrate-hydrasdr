@@ -74,10 +74,10 @@ jobs:
             git
             zip
 
-      - name: Build SDK (rfone_host)
+      - name: Build SDK (hydrasdr-host)
         shell: msys2 {0}
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
 
           # Use cygpath -m to get a Mixed (Windows-style forward slash) absolute path
@@ -153,7 +153,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local ..
           make -j$(sysctl -n hw.ncpu)
@@ -210,7 +210,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
@@ -288,7 +288,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
@@ -366,7 +366,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
@@ -435,7 +435,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
@@ -500,7 +500,7 @@ jobs:
             --define "pkg_version ${VERSION}" \
             --define "pkg_release ${RPM_RELEASE}"
 
-          # Rename to match rfone_host convention
+          # Rename to match hydrasdr-host convention
           mv ~/rpmbuild/RPMS/x86_64/*.rpm "${PACKAGE_NAME}-${DIST_NAME}-v${VERSION}.rpm"
 
       - uses: actions/upload-artifact@v4
@@ -525,7 +525,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
@@ -612,7 +612,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
@@ -715,7 +715,7 @@ jobs:
 
       - name: Build SDK
         run: |
-          git clone https://github.com/hydrasdr/rfone_host.git sdk_src
+          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
           mkdir -p sdk_src/build && cd sdk_src/build
           cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
           make -j$(nproc)
@@ -768,7 +768,7 @@ jobs:
           # Run makepkg as builder
           su builder -c "makepkg --skipchecksums --noconfirm"
 
-          # Rename to match rfone_host convention
+          # Rename to match hydrasdr-host convention
           mv *.pkg.tar.zst "${PACKAGE_NAME}-${DIST_NAME}-v${VERSION}.pkg.tar.zst"
 
       - uses: actions/upload-artifact@v4
