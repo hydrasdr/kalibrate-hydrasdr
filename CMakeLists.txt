@@ -1,8 +1,19 @@
-cmake_minimum_required(VERSION 3.10)
-project(kalibrate-hydrasdr CXX)
+cmake_minimum_required(VERSION 3.11)
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+project(kalibrate-hydrasdr C CXX)
 
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(FetchContent)
+
+option(HYDRASDR_FETCH_FROM_GIT "Fetch libhydrasdr from GitHub if not found" ON)
+set(HYDRASDR_FETCH_GIT_REPO "https://github.com/hydrasdr/hydrasdr-host.git"
+    CACHE STRING "Git repository URL for hydrasdr-host")
+set(HYDRASDR_FETCH_GIT_TAG "main"
+    CACHE STRING "Git tag/branch/commit for hydrasdr-host")
 
 include_directories(${CMAKE_SOURCE_DIR}/src)
 
@@ -64,9 +75,10 @@ get_filename_component(LIBUSB_LIBRARY_DIR "${LIBUSB_LIBRARY}" DIRECTORY)
 
 print_lib_status("LibUSB" "${LIBUSB_SOURCE}" "${LIBUSB_LIBRARIES}" "${LIBUSB_INCLUDE_DIRS}")
 
-# Force cache for HydraSDRConfig compatibility
+# Force cache for HydraSDRConfig / FindLIBUSB compatibility
 set(LIBUSB_INCLUDE_DIR "${LIBUSB_INCLUDE_DIRS}" CACHE PATH "" FORCE)
 set(LIBUSB_LIBRARY     "${LIBUSB_LIBRARIES}"    CACHE FILEPATH "" FORCE)
+set(LIBUSB_LIBRARIES   "${LIBUSB_LIBRARIES}"    CACHE FILEPATH "" FORCE)
 
 
 # ==============================================================================
@@ -90,26 +102,23 @@ else()
     set(FFTW3_LIBRARIES    ${PC_FFTW3_LIBRARIES})
 endif()
 
-# macOS: fix pkg-config returning "fftw3" instead of a real path
-if(APPLE)
-    # If library is not an actual file, resolve it manually.
-    if(NOT EXISTS "${FFTW3_LIBRARIES}")
-        message(STATUS "macOS: pkg-config returned '${FFTW3_LIBRARIES}', resolving actual file...")
-        
-        # Use a DISTINCT variable name to avoid shadowing the pkg-config local variable
-        find_library(FFTW3_RESOLVED_PATH
-            NAMES fftw3 libfftw3-3
-            HINTS ${CMAKE_PREFIX_PATH} /opt/homebrew/lib /usr/local/lib
-            PATH_SUFFIXES lib
-        )
+# Fix pkg-config returning "fftw3" (name only) instead of a real path
+# This happens on macOS (Homebrew) and MSVC (vcpkg)
+if(NOT EXISTS "${FFTW3_LIBRARIES}")
+    message(STATUS "pkg-config returned '${FFTW3_LIBRARIES}', resolving actual file...")
 
-        if(FFTW3_RESOLVED_PATH)
-            # Overwrite the local variable with the absolute path found
-            set(FFTW3_LIBRARIES "${FFTW3_RESOLVED_PATH}")
-            message(STATUS "macOS: Resolved to '${FFTW3_LIBRARIES}'")
-        else()
-            message(FATAL_ERROR "[FAIL] Could not resolve absolute path for fftw3 on macOS.")
-        endif()
+    # Use a DISTINCT variable name to avoid shadowing the pkg-config local variable
+    find_library(FFTW3_RESOLVED_PATH
+        NAMES fftw3 libfftw3-3
+        HINTS ${CMAKE_PREFIX_PATH} /opt/homebrew/lib /usr/local/lib
+        PATH_SUFFIXES lib
+    )
+
+    if(FFTW3_RESOLVED_PATH)
+        set(FFTW3_LIBRARIES "${FFTW3_RESOLVED_PATH}")
+        message(STATUS "Resolved to '${FFTW3_LIBRARIES}'")
+    else()
+        message(FATAL_ERROR "[FAIL] Could not resolve absolute path for fftw3.")
     endif()
 endif()
 
@@ -130,78 +139,119 @@ print_lib_status("FFTW3" "${FFTW3_SOURCE}" "${FFTW3_LIBRARIES}" "${FFTW3_INCLUDE
 # ==============================================================================
 message(STATUS ">> Searching for HydraSDR...")
 
-set(USE_MANUAL_SEARCH FALSE)
+set(HYDRASDR_FETCHED FALSE)
+set(HYDRASDR_TARGET "")
 set(HYDRASDR_DISPLAY_LIB "")
 set(HYDRASDR_DISPLAY_INC "")
 
-# A. Try CMake Config
+# A. Try installed SDK via find_package
 find_package(HydraSDR QUIET NO_CMAKE_SYSTEM_PACKAGE_REGISTRY NO_CMAKE_PACKAGE_REGISTRY)
 
 if(HydraSDR_FOUND)
     foreach(tgt HydraSDR::HydraSDR HydraSDR::hydrasdr hydrasdr)
         if(TARGET ${tgt})
-            set(HYDRASDR_LIBS ${tgt})
-            set(HYDRASDR_SOURCE "CMake Config (Target: ${tgt})")
             set(HYDRASDR_TARGET ${tgt})
+            set(HYDRASDR_SOURCE "CMake Config (Target: ${tgt})")
             break()
         endif()
     endforeach()
 
-    if(NOT HYDRASDR_TARGET)
-        message(WARNING "[!] HydraSDRConfig found but no usable target.")
-        set(USE_MANUAL_SEARCH TRUE)
-    else()
+    if(HYDRASDR_TARGET)
         get_target_property(HYDRASDR_DISPLAY_LIB ${HYDRASDR_TARGET} IMPORTED_LOCATION)
         if(NOT HYDRASDR_DISPLAY_LIB)
             get_target_property(HYDRASDR_DISPLAY_LIB ${HYDRASDR_TARGET} IMPORTED_LOCATION_RELEASE)
         endif()
         get_target_property(HYDRASDR_DISPLAY_INC ${HYDRASDR_TARGET} INTERFACE_INCLUDE_DIRECTORIES)
+    else()
+        message(WARNING "[!] HydraSDRConfig found but no usable target.")
+        set(HydraSDR_FOUND FALSE)
     endif()
-else()
-    set(USE_MANUAL_SEARCH TRUE)
 endif()
 
-# B. Manual search
-if(USE_MANUAL_SEARCH)
-    if(NOT CMAKE_LIBRARY_ARCHITECTURE AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        execute_process(
-            COMMAND dpkg-architecture -qDEB_HOST_MULTIARCH
-            OUTPUT_VARIABLE CMAKE_LIBRARY_ARCHITECTURE
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-    endif()
-
-    find_library(HYDRASDR_LIB
-        NAMES hydrasdr libhydrasdr
-        PATHS ${CMAKE_SOURCE_DIR}/lib
-        HINTS $ENV{SDK_ROOT} ${CMAKE_PREFIX_PATH}
-        PATH_SUFFIXES
-            lib lib64 bin
-            lib/${CMAKE_LIBRARY_ARCHITECTURE}
-            lib/x86_64-linux-gnu
-            lib/aarch64-linux-gnu
-    )
-
-    find_path(HYDRASDR_INCLUDE_DIR
-        NAMES hydrasdr.h
-        PATHS ${CMAKE_SOURCE_DIR}/include
-        HINTS $ENV{SDK_ROOT} ${CMAKE_PREFIX_PATH}
-        PATH_SUFFIXES include include/libhydrasdr
-    )
-
-    if(NOT HYDRASDR_LIB OR NOT HYDRASDR_INCLUDE_DIR)
+# B. FetchContent fallback -- clone hydrasdr-host and build only libhydrasdr/
+if(NOT HydraSDR_FOUND)
+    if(NOT HYDRASDR_FETCH_FROM_GIT)
         message(FATAL_ERROR
-            "[FAIL] HydraSDR not found.\n"
-            "Checked: ${CMAKE_SOURCE_DIR}/lib, ENV{SDK_ROOT}, CMAKE_PREFIX_PATH"
+            "[FAIL] HydraSDR not found and HYDRASDR_FETCH_FROM_GIT is OFF.\n"
+            "Install the SDK or set -DCMAKE_PREFIX_PATH=<sdk-root>."
         )
     endif()
 
-    set(HYDRASDR_LIBS ${HYDRASDR_LIB})
-    set(HYDRASDR_SOURCE "Manual Search")
-    set(HYDRASDR_DISPLAY_LIB ${HYDRASDR_LIB})
-    set(HYDRASDR_DISPLAY_INC ${HYDRASDR_INCLUDE_DIR})
-    include_directories(${HYDRASDR_INCLUDE_DIR})
+    message(STATUS ">> HydraSDR not found -- fetching from ${HYDRASDR_FETCH_GIT_REPO} (${HYDRASDR_FETCH_GIT_TAG})")
+
+    FetchContent_Declare(hydrasdr-host
+        GIT_REPOSITORY ${HYDRASDR_FETCH_GIT_REPO}
+        GIT_TAG        ${HYDRASDR_FETCH_GIT_TAG}
+        GIT_SHALLOW    TRUE
+    )
+
+    FetchContent_GetProperties(hydrasdr-host)
+    if(NOT hydrasdr-host_POPULATED)
+        FetchContent_Populate(hydrasdr-host)
+    endif()
+
+    # MSVC needs pthreads4w (normally set up by hydrasdr-host top-level CMakeLists.txt)
+    # With vcpkg: install pthreads via "vcpkg install pthreads:x64-windows"
+    if(MSVC)
+        add_compile_definitions(_TIMESPEC_DEFINED _CRT_SECURE_NO_WARNINGS)
+
+        find_package(PThreads4W QUIET)
+        if(TARGET PThreads4W::PThreads4W)
+            # vcpkg-provided pthreads4w -- create alias expected by libhydrasdr
+            add_library(pthreads4w_static ALIAS PThreads4W::PThreads4W)
+            get_target_property(_ptw32_inc PThreads4W::PThreads4W
+                INTERFACE_INCLUDE_DIRECTORIES)
+            set(THREADS_PTHREADS_INCLUDE_DIR "${_ptw32_inc}"
+                CACHE PATH "pthreads include directory" FORCE)
+            message(STATUS ">> pthreads4w: using vcpkg PThreads4W::PThreads4W")
+        else()
+            message(FATAL_ERROR
+                "[FAIL] PThreads4W not found. Install via: vcpkg install pthreads:x64-windows\n"
+                "and pass -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake"
+            )
+        endif()
+    endif()
+
+    # For MSVC multi-config: set LIBUSB_DLL so libhydrasdr's post-build copy
+    # doesn't fail with an empty argument, and redirect its output directory
+    if(MSVC)
+        # Find the libusb DLL for post-build copy (prefer release over debug)
+        # vcpkg's find_file may resolve the debug variant; use EXISTS to bypass.
+        get_filename_component(_libusb_inc_parent "${LIBUSB_INCLUDE_DIR}" DIRECTORY)
+        get_filename_component(_libusb_inc_root "${_libusb_inc_parent}" DIRECTORY)
+        set(_libusb_release_dll "${_libusb_inc_root}/bin/libusb-1.0.dll")
+        if(EXISTS "${_libusb_release_dll}")
+            set(LIBUSB_DLL "${_libusb_release_dll}" CACHE FILEPATH "libusb DLL" FORCE)
+        else()
+            get_filename_component(_libusb_lib_dir "${LIBUSB_LIBRARY}" DIRECTORY)
+            get_filename_component(_libusb_prefix "${_libusb_lib_dir}" DIRECTORY)
+            find_file(LIBUSB_DLL NAMES libusb-1.0.dll
+                HINTS "${_libusb_prefix}/bin" "${_libusb_lib_dir}"
+            )
+            if(LIBUSB_DLL)
+                set(LIBUSB_DLL "${LIBUSB_DLL}" CACHE FILEPATH "libusb DLL" FORCE)
+            endif()
+        endif()
+
+        # Override CMAKE_RUNTIME_OUTPUT_DIRECTORY so libhydrasdr puts its
+        # DLL next to kal.exe (also satisfies hydrasdr-tools copy targets)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}" CACHE PATH "" FORCE)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/Debug" CACHE PATH "" FORCE)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/Release" CACHE PATH "" FORCE)
+    endif()
+
+    # Build only libhydrasdr/ (skip hydrasdr-tools which is always added by top-level)
+    add_subdirectory(
+        ${hydrasdr-host_SOURCE_DIR}/libhydrasdr
+        ${hydrasdr-host_BINARY_DIR}/libhydrasdr
+        EXCLUDE_FROM_ALL
+    )
+
+    set(HYDRASDR_TARGET hydrasdr)
+    set(HYDRASDR_FETCHED TRUE)
+    set(HYDRASDR_SOURCE "FetchContent (${HYDRASDR_FETCH_GIT_REPO} @ ${HYDRASDR_FETCH_GIT_TAG})")
+    set(HYDRASDR_DISPLAY_LIB "<built from source>")
+    set(HYDRASDR_DISPLAY_INC "${hydrasdr-host_SOURCE_DIR}/libhydrasdr")
 endif()
 
 print_lib_status("HydraSDR"
@@ -220,12 +270,11 @@ file(GLOB HEADERS "src/*.h")
 add_executable(kal ${SOURCES} ${HEADERS})
 
 target_include_directories(kal PRIVATE
-    ${HYDRASDR_INCLUDE_DIR}
     ${FFTW3_INCLUDE_DIRS}
 )
 
 set(KAL_LIBS
-    ${HYDRASDR_LIBS}
+    ${HYDRASDR_TARGET}
     ${FFTW3_LIBRARIES}
 )
 
@@ -254,33 +303,100 @@ target_link_libraries(kal PRIVATE ${KAL_LIBS})
 if(WIN32)
     message(STATUS ">> Configuring DLL copy steps...")
 
-    if(DEFINED ENV{MSYSTEM_PREFIX})
-        set(MSYS2_BIN "$ENV{MSYSTEM_PREFIX}/bin")
-    elseif(LIBUSB_LIBRARY_DIR)
-        get_filename_component(MSYS2_ROOT "${LIBUSB_LIBRARY_DIR}" DIRECTORY)
-        set(MSYS2_BIN "${MSYS2_ROOT}/bin")
-    else()
-        set(MSYS2_BIN "/mingw64/bin")
+    # Copy libhydrasdr DLL next to kal.exe
+    if(HYDRASDR_FETCHED)
+        add_custom_command(TARGET kal POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:hydrasdr> $<TARGET_FILE_DIR:kal>
+            COMMENT "Copying libhydrasdr.dll (FetchContent)"
+        )
+    elseif(TARGET ${HYDRASDR_TARGET})
+        add_custom_command(TARGET kal POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:${HYDRASDR_TARGET}> $<TARGET_FILE_DIR:kal>
+            COMMENT "Copying libhydrasdr.dll (installed SDK)"
+        )
     endif()
 
-    function(copy_dll_if_exists src target_dir)
-        if(EXISTS "${src}")
-            message(STATUS "   Will copy: ${src}")
-            add_custom_command(TARGET kal POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${src}" "${target_dir}"
+    # Copy libusb-1.0.dll — prefer release DLL
+    # For MSVC, LIBUSB_DLL is already set by the FetchContent block above.
+    # For MINGW, derive from include directory (always points to release prefix).
+    if(NOT LIBUSB_DLL)
+        get_filename_component(_lusb_inc_parent "${LIBUSB_INCLUDE_DIR}" DIRECTORY)
+        get_filename_component(_lusb_inc_root "${_lusb_inc_parent}" DIRECTORY)
+        set(_lusb_release_dll "${_lusb_inc_root}/bin/libusb-1.0.dll")
+        if(EXISTS "${_lusb_release_dll}")
+            set(LIBUSB_DLL "${_lusb_release_dll}")
+        else()
+            get_filename_component(_lusb_dir "${LIBUSB_LIBRARY}" DIRECTORY)
+            get_filename_component(_lusb_prefix "${_lusb_dir}" DIRECTORY)
+            set(_lusb_dll_hints "${_lusb_prefix}/bin" "${_lusb_dir}")
+            if(DEFINED ENV{MSYSTEM_PREFIX})
+                list(APPEND _lusb_dll_hints "$ENV{MSYSTEM_PREFIX}/bin")
+            endif()
+            unset(LIBUSB_DLL CACHE)
+            find_file(LIBUSB_DLL NAMES libusb-1.0.dll
+                HINTS ${_lusb_dll_hints}
             )
         endif()
-    endfunction()
-
-    if(HYDRASDR_LIBRARY_DIR)
-        get_filename_component(SDK_ROOT "${HYDRASDR_LIBRARY_DIR}" DIRECTORY)
-        copy_dll_if_exists("${SDK_ROOT}/bin/libhydrasdr.dll"   $<TARGET_FILE_DIR:kal>)
-        copy_dll_if_exists("${HYDRASDR_LIBRARY_DIR}/libhydrasdr.dll" $<TARGET_FILE_DIR:kal>)
+    endif()
+    if(LIBUSB_DLL)
+        message(STATUS "   Will copy: ${LIBUSB_DLL}")
+        add_custom_command(TARGET kal POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${LIBUSB_DLL}" $<TARGET_FILE_DIR:kal>
+            COMMENT "Copying libusb-1.0.dll"
+        )
+    else()
+        message(WARNING "   libusb-1.0.dll not found — kal.exe may fail at runtime")
     endif()
 
-    copy_dll_if_exists("${CMAKE_SOURCE_DIR}/libhydrasdr.dll"          $<TARGET_FILE_DIR:kal>)
-    copy_dll_if_exists("${CMAKE_SOURCE_DIR}/lib/libhydrasdr.dll"      $<TARGET_FILE_DIR:kal>)
-    copy_dll_if_exists("${MSYS2_BIN}/libusb-1.0.dll"                  $<TARGET_FILE_DIR:kal>)
+    # Copy pthreads DLL (MSVC with dynamic vcpkg triplet)
+    # libhydrasdr already sets PTW32_STATIC_LIB and links pthreads4w_static.
+    # If the vcpkg triplet is static, no DLL exists and this is a no-op.
+    # For truly static pthreads: vcpkg install pthreads:x64-windows-static-md
+    if(MSVC AND TARGET PThreads4W::PThreads4W)
+        get_filename_component(_ptw32_prefix "${THREADS_PTHREADS_INCLUDE_DIR}" DIRECTORY)
+        find_file(PTHREADS_DLL
+            NAMES pthreadVC3.dll pthreadVC2.dll pthreadVCE3.dll
+            HINTS "${_ptw32_prefix}/bin" "${_ptw32_prefix}/lib"
+        )
+        if(PTHREADS_DLL)
+            message(STATUS "   Will copy: ${PTHREADS_DLL}")
+            message(STATUS "   NOTE: To eliminate pthreads DLL dependency, use:")
+            message(STATUS "         vcpkg install pthreads:x64-windows-static-md")
+            add_custom_command(TARGET kal POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${PTHREADS_DLL}" $<TARGET_FILE_DIR:kal>
+                COMMENT "Copying pthreads DLL"
+            )
+        else()
+            message(STATUS "   pthreads DLL not found (static linkage assumed)")
+        endif()
+    endif()
+
+    # Copy FFTW3 DLL (MINGW only — vcpkg handles this for MSVC)
+    if(NOT MSVC)
+        get_filename_component(_fftw_dir "${FFTW3_LIBRARIES}" DIRECTORY)
+        get_filename_component(_fftw_prefix "${_fftw_dir}" DIRECTORY)
+        set(_fftw_dll_hints "${_fftw_prefix}/bin" "${_fftw_dir}")
+        if(DEFINED ENV{MSYSTEM_PREFIX})
+            list(APPEND _fftw_dll_hints "$ENV{MSYSTEM_PREFIX}/bin")
+        endif()
+        find_file(FFTW3_DLL NAMES libfftw3-3.dll fftw3.dll
+            HINTS ${_fftw_dll_hints}
+        )
+        if(FFTW3_DLL)
+            message(STATUS "   Will copy: ${FFTW3_DLL}")
+            add_custom_command(TARGET kal POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${FFTW3_DLL}" $<TARGET_FILE_DIR:kal>
+                COMMENT "Copying FFTW3 DLL"
+            )
+        else()
+            message(WARNING "   FFTW3 DLL not found — kal.exe may fail at runtime")
+        endif()
+    endif()
 endif()
 
 
@@ -289,3 +405,20 @@ endif()
 # ==============================================================================
 include(GNUInstallDirs)
 install(TARGETS kal RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+# EXCLUDE_FROM_ALL suppresses libhydrasdr's own install rules, so add ours
+if(HYDRASDR_FETCHED)
+    if(WIN32)
+        install(FILES $<TARGET_FILE:hydrasdr> DESTINATION ${CMAKE_INSTALL_BINDIR})
+    else()
+        install(TARGETS hydrasdr LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    endif()
+endif()
+
+# ==============================================================================
+# Optional Test Suite
+# ==============================================================================
+if(IS_DIRECTORY "${CMAKE_SOURCE_DIR}/tests")
+    enable_testing()
+    add_subdirectory(tests)
+endif()

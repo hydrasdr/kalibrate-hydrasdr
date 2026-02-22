@@ -17,10 +17,11 @@
 
 #ifdef _WIN32
 #include "win_compat.h"
-inline double round(double x) { return floor(x + 0.5); }
+#endif
+#ifndef _MSC_VER
+#include <unistd.h>
 #endif
 #ifdef __linux__
-#include <unistd.h>
 #include <sys/time.h>
 #endif
 
@@ -28,21 +29,15 @@ inline double round(double x) { return floor(x + 0.5); }
 #include "fcch_detector.h"
 #include "circular_buffer.h"
 #include "util.h"
+#include "kal_globals.h"
 
 static const unsigned int TARGET_COUNT = 100; // We want 100 good samples
 static const unsigned int MAX_ITERATIONS = 500; // But quit if we process 500 frames without success
-static const float OFFSET_MAX = 40e3;
-
-extern int g_verbosity;
-extern int g_show_fft;
-extern volatile sig_atomic_t g_kal_exit_req;
 
 /**
  * @brief Calculates the frequency offset by averaging multiple FCCH detections.
  */
 int offset_detect(hydrasdr_source *u, int hz_adjust, float tuner_error) {
-
-#define GSM_RATE (1625000.0 / 6.0)
 
 	unsigned int new_overruns = 0, overruns = 0;
 	unsigned int notfound = 0;
@@ -60,12 +55,12 @@ int offset_detect(hydrasdr_source *u, int hz_adjust, float tuner_error) {
 	fcch_detector *l;
 	circular_buffer *cb;
 
-	l = new fcch_detector(u->sample_rate());
+	l = new fcch_detector((float)u->sample_rate());
 
 	/*
 	 * We grab slightly more than 1 frame length to ensure overlap
 	 */
-	sps = u->sample_rate() / GSM_RATE;
+	sps = (float)(u->sample_rate() / GSM_RATE);
 	s_len = (unsigned int)ceil((12 * 8 * 156.25 + 156.25) * sps);
 	cb = u->get_buffer();
 
@@ -117,10 +112,10 @@ int offset_detect(hydrasdr_source *u, int hz_adjust, float tuner_error) {
 			// FOUND!
 			
 			// FCCH is a sine wave at GSM_RATE / 4 (approx 67.7 kHz)
-			offset = offset - GSM_RATE / 4 - tuner_error;
+			offset = offset - (float)(GSM_RATE / 4) - tuner_error;
 
 			// Sanity check: Reject wild offsets (aliasing or false positives)
-			if(fabs(offset) < OFFSET_MAX) {
+			if(fabs(offset) < FCCH_OFFSET_MAX) {
 				offsets[count] = offset;
 				count++;
 
@@ -194,7 +189,7 @@ int offset_detect(hydrasdr_source *u, int hz_adjust, float tuner_error) {
 	printf("Results (%u valid bursts out of %u attempts)\n", count, iterations);
 	printf("--------------------------------------------------\n");
 	printf("average\t\t[min, max]\t(range, stddev)\n");
-	display_freq(avg_offset);
+	display_freq((float)avg_offset);
 	printf("\t\t[%d, %d]\t(%d, %f)\n", (int)round(min), (int)round(max), (int)round(max - min), stddev);
 	printf("overruns: %u\n", overruns);
 	printf("not found: %u\n", notfound);

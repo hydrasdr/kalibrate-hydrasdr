@@ -18,11 +18,8 @@
 
 #ifdef _WIN32
 #include "win_compat.h"
-// Fix for isatty on Windows
-#ifndef isatty
-#define isatty _isatty
 #endif
-#else
+#ifndef _MSC_VER
 #include <unistd.h>
 #endif
 
@@ -31,22 +28,10 @@
 #include "fcch_detector.h"
 #include "arfcn_freq.h"
 #include "util.h"
+#include "kal_globals.h"
+#include "kal_types.h"
 
-extern int g_verbosity;
-extern int g_show_fft;
-extern volatile sig_atomic_t g_kal_exit_req;
-
-static const float ERROR_DETECT_OFFSET_MAX = 40e3;
-
-#define MAX_ARFCN 2048 
-
-static double vectornorm2(const complex *v, const unsigned int len) {
-	unsigned int i;
-	double e = 0.0;
-	for(i = 0; i < len; i++)
-		e += norm(v[i]);
-	return e;
-}
+#define MAX_ARFCN 2048
 
 /**
  * @brief Scans for a Base Station (C0 channel) in the specified band.
@@ -56,7 +41,6 @@ static double vectornorm2(const complex *v, const unsigned int len) {
  */
 int c0_detect(hydrasdr_source *u, int bi) {
 
-#define GSM_RATE (1625000.0 / 6.0)
 #define NOTFOUND_MAX 10
 
 	int i, chan_count;
@@ -71,7 +55,7 @@ int c0_detect(hydrasdr_source *u, int bi) {
 	double freq, sps, n, a;
 	complex *b;
 	circular_buffer *ub;
-	fcch_detector *detector = new fcch_detector(u->sample_rate());
+	fcch_detector *detector = new fcch_detector((float)u->sample_rate());
 
 	if(bi == BI_NOT_DEFINED) {
 		fprintf(stderr, "error: c0_detect: band not defined\n");
@@ -141,7 +125,7 @@ int c0_detect(hydrasdr_source *u, int bi) {
 		if (g_kal_exit_req) break;
 
 		b = (complex *)ub->peek(&b_len);
-		n = sqrt(vectornorm2(b, power_scan_len)); // Calculate norm over short length
+		n = sqrt(vectornorm2<double>(b, power_scan_len)); // Calculate norm over short length
 		power[i] = n;
 		if(g_verbosity > 2) {
 			fprintf(stderr, "\tchan %d (%.1fMHz):\tpower: %6.1f dBFS\n",
@@ -219,8 +203,8 @@ int c0_detect(hydrasdr_source *u, int bi) {
 
 		b = (complex *)ub->peek(&b_len);
 		r = detector->scan(b, b_len, &offset, 0);
-		effective_offset = offset - GSM_RATE / 4;
-		if(r && (fabsf(effective_offset) < ERROR_DETECT_OFFSET_MAX)) {
+		effective_offset = offset - (float)(GSM_RATE / 4);
+		if(r && (fabsf(effective_offset) < FCCH_OFFSET_MAX)) {
 			if (found_count) {
 				min_offset = fmin(min_offset, effective_offset);
 				max_offset = fmax(max_offset, effective_offset);
@@ -230,7 +214,7 @@ int c0_detect(hydrasdr_source *u, int bi) {
 			found_count++;
 			
 			// Recalculate power for the current buffer to match FFT display
-			double current_norm = sqrt(vectornorm2(b, b_len));
+			double current_norm = sqrt(vectornorm2<double>(b, b_len));
 			double current_dbfs = calc_dbfs(current_norm, b_len);
 
 			printf(" chan: %4d (%.1fMHz ", i, freq / 1e6);

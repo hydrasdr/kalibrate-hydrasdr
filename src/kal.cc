@@ -8,7 +8,7 @@
  * @copyright 2010 Joshua Lackey, 2025 Benjamin Vernoux
  * @license BSD-2-Clause
  */
-#define PACKAGE_VERSION "0.5.0"
+#define PACKAGE_VERSION "0.5.1"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,11 +20,12 @@
 #ifdef _WIN32
 #include "win_compat.h"
 #define basename(x) "kal"
-#define strtof strtod
 #else
-#include <unistd.h>
 #include <sys/time.h>
 #include <libgen.h>
+#endif
+#ifndef _MSC_VER
+#include <unistd.h>
 #endif
 
 #include "hydrasdr_source.h"
@@ -33,6 +34,7 @@
 #include "offset.h"
 #include "c0_detect.h"
 #include "util.h"
+#include "kal_globals.h"
 
 #define HYDRASDR_FLASH_CALIB_OFFSET (0x20000) 
 #define HYDRASDR_FLASH_CALIB_HEADER (0xCA1B0001)
@@ -55,11 +57,19 @@ void sighandler(int signum) {
 	if (g_kal_exit_req) {
 		// Force exit on double Ctrl-C
 		const char* msg = "\nForcing exit.\n";
-		write(2, msg, strlen(msg)); 
+#ifdef _MSC_VER
+		_write(2, msg, (unsigned int)strlen(msg));
+#else
+		write(2, msg, strlen(msg));
+#endif
 		_exit(1);
 	}
 	const char* msg = "\nSignal received, stopping...\n";
+#ifdef _MSC_VER
+	_write(2, msg, (unsigned int)strlen(msg));
+#else
 	write(2, msg, strlen(msg));
+#endif
 	g_kal_exit_req = 1;
 }
 
@@ -310,7 +320,7 @@ int main(int argc, char **argv) {
 			goto cleanup;
 		}
 
-		double tuner_error = 0.0; 
+		float tuner_error = 0.0f;
 
 		fprintf(stderr, "%s: Calculating clock frequency offset.\n", basename(argv[0]));
 		fprintf(stderr, "Using %s channel %d (%.1fMHz)\n", bi_to_str(bi), chan, freq / 1e6);

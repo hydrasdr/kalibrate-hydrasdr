@@ -35,15 +35,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 #include <string.h>
 #include <errno.h>
 #include <math.h>
 #include <algorithm>
 #include <iterator>
-#include <signal.h>
 
 #include "hydrasdr_source.h"
+#include "kal_globals.h"
 
 /**
  * @brief Maximum linearity gain index supported by hardware.
@@ -63,14 +65,6 @@
 #ifndef CLAMP
 #define CLAMP(x, low, high)  (((x) > (high)) ? (high) : (((x) < (low)) ? (low) : (x)))
 #endif
-
-/**
- * @brief External global exit flag from main application.
- *
- * Set by signal handlers (SIGINT, etc.) to request graceful shutdown.
- * Checked periodically by fill() to avoid blocking indefinitely.
- */
-extern volatile sig_atomic_t g_kal_exit_req;
 
 /*
  * ---------------------------------------------------------------------------
@@ -242,7 +236,7 @@ int hydrasdr_source::set_gain(float gain)
 	int gain_val = (int)round(gain);
 	gain_val = CLAMP(gain_val, 0, LINEARITY_GAIN_MAX);
 
-	int r = hydrasdr_set_linearity_gain(dev, (uint8_t)gain_val);
+	int r = hydrasdr_set_gain(dev, HYDRASDR_GAIN_TYPE_LINEARITY, (uint8_t)gain_val);
 	if (r != HYDRASDR_SUCCESS) {
 		fprintf(stderr, "Failed to set linearity gain: %d\n", r);
 		return -1;
@@ -336,7 +330,7 @@ int hydrasdr_source::fill_buffer_callback(hydrasdr_transfer_t* transfer)
 	 * Previously this only incremented by 1 regardless of actual drop count.
 	 */
 	if (transfer->dropped_samples > 0) {
-		m_overflow_count += transfer->dropped_samples;
+		m_overflow_count += (unsigned int)transfer->dropped_samples;
 	}
 
 	/*
@@ -368,17 +362,17 @@ int hydrasdr_source::fill_buffer_callback(hydrasdr_transfer_t* transfer)
 		std::unique_lock<std::mutex> lock(data_mutex, std::defer_lock);
 		if (lock.try_lock()) {
 			if (cb) {
-				unsigned int written = cb->write(m_batch_buffer, produced);
-				if (written < produced) {
+				unsigned int written = cb->write(m_batch_buffer, (unsigned int)produced);
+				if (written < (unsigned int)produced) {
 					/* Software overflow: buffer full */
-					m_overflow_count += (produced - written);
+					m_overflow_count += (unsigned int)(produced - written);
 				}
 			}
 			lock.unlock();
 			data_ready.notify_one();
 		} else {
 			/* Lock contention: drop samples */
-			m_overflow_count += produced;
+			m_overflow_count += (unsigned int)produced;
 		}
 	}
 

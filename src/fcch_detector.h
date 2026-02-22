@@ -16,10 +16,8 @@
 #define __FCCH_DETECTOR_H__
 
 #include <fftw3.h>
-#include <complex>
 #include "circular_buffer.h"
-
-typedef std::complex<float> complex;
+#include "kal_types.h"
 
 /** @brief FFT size for frequency detection. */
 #define FFT_SIZE 1024

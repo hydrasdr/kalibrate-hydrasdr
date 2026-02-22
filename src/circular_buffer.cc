@@ -19,11 +19,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <climits>
 #include <stdexcept>
-#include <algorithm> 
+#include <algorithm>
 
-#ifndef _WIN32
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
+#ifndef _WIN32
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -45,6 +48,10 @@ circular_buffer::circular_buffer(unsigned int buf_len, unsigned int item_size, i
 
 	m_item_size = item_size;
 	m_overwrite = overwrite;
+
+	/* Check for multiplication overflow before allocating */
+	if (buf_len > UINT_MAX / item_size)
+		throw std::runtime_error("circular_buffer: buffer size overflow");
 
 	SYSTEM_INFO sysInfo;
 	GetSystemInfo(&sysInfo);
@@ -99,6 +106,10 @@ circular_buffer::circular_buffer(unsigned int buf_len, unsigned int item_size, i
 
 	m_item_size = item_size;
 	m_overwrite = overwrite;
+
+	/* Check for multiplication overflow before allocating */
+	if (buf_len > UINT_MAX / item_size)
+		throw std::runtime_error("circular_buffer: buffer size overflow");
 
 	long page_size = sysconf(_SC_PAGESIZE);
 	if (page_size < 0) page_size = 4096;

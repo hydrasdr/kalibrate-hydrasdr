@@ -8,7 +8,6 @@
  * @license BSD-2-Clause
  */
 
-#define _USE_MATH_DEFINES
 #include <cmath>
 #include <complex>
 #include <cstdio>
@@ -18,16 +17,7 @@
 #include <algorithm>
 
 #include "fcch_detector.h"
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-#ifndef GSM_RATE
-#define GSM_RATE (1625000.0 / 6.0)
-#endif
-
-extern int g_debug;
+#include "kal_globals.h"
 
 static const char * const fftw_plan_name = ".kal_fftw_plan";
 static const size_t PLAN_BUF_SIZE = 1024;
@@ -56,12 +46,29 @@ fcch_detector::fcch_detector(const float sample_rate, const unsigned int D,
 	m_filter_delay = 8;
 	m_w_len = 2 * m_filter_delay + 1;
 
-	m_w = new complex[m_w_len];
-	std::fill(m_w, m_w + m_w_len, complex(0.0f, 0.0f));
+	/* Initialize all pointers to NULL for exception-safe cleanup */
+	m_w = NULL;
+	m_x_cb = NULL;
+	m_y_cb = NULL;
+	m_e_cb = NULL;
+	m_in = NULL;
+	m_out = NULL;
+	m_plan = NULL;
 
-	m_x_cb = new circular_buffer(8192, sizeof(complex), 0);
-	m_y_cb = new circular_buffer(8192, sizeof(complex), 1);
-	m_e_cb = new circular_buffer(1015808, sizeof(float), 0);
+	try {
+		m_w = new complex[m_w_len];
+		std::fill(m_w, m_w + m_w_len, complex(0.0f, 0.0f));
+
+		m_x_cb = new circular_buffer(8192, sizeof(complex), 0);
+		m_y_cb = new circular_buffer(8192, sizeof(complex), 1);
+		m_e_cb = new circular_buffer(1015808, sizeof(float), 0);
+	} catch (...) {
+		delete[] m_w;
+		delete m_x_cb;
+		delete m_y_cb;
+		delete m_e_cb;
+		throw;
+	}
 
 	/* Initialize edge detection state machine (instance variables) */
 	m_lth_count = 0;
@@ -70,8 +77,15 @@ fcch_detector::fcch_detector(const float sample_rate, const unsigned int D,
 	/* FFTW setup */
 	m_in = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * FFT_SIZE);
 	m_out = (fftw_complex *)fftw_malloc(sizeof(fftw_complex) * FFT_SIZE);
-	if ((!m_in) || (!m_out))
+	if ((!m_in) || (!m_out)) {
+		delete[] m_w;
+		delete m_x_cb;
+		delete m_y_cb;
+		delete m_e_cb;
+		if (m_in) fftw_free(m_in);
+		if (m_out) fftw_free(m_out);
 		throw std::runtime_error("fcch_detector: fftw_malloc failed!");
+	}
 
 	/* Try to load existing FFTW wisdom */
 	home = getenv("HOME");
@@ -93,8 +107,15 @@ fcch_detector::fcch_detector(const float sample_rate, const unsigned int D,
 		fclose(plan_fp);
 	}
 
-	if (!m_plan)
+	if (!m_plan) {
+		delete[] m_w;
+		delete m_x_cb;
+		delete m_y_cb;
+		delete m_e_cb;
+		fftw_free(m_in);
+		fftw_free(m_out);
 		throw std::runtime_error("fcch_detector: fftw plan failed!");
+	}
 }
 
 fcch_detector::~fcch_detector()
@@ -233,7 +254,7 @@ static inline float peak_detect(const complex *s, const unsigned int s_len,
 	if (peak)
 		*peak = cmax;
 	if (avg_power)
-		*avg_power = (sum_power - std::norm(cmax)) / (s_len - 1);
+		*avg_power = (s_len > 1) ? (sum_power - std::norm(cmax)) / (s_len - 1) : sum_power;
 
 	return max_i;
 }
@@ -242,15 +263,6 @@ static inline float itof(float index, float sample_rate, unsigned int fft_size)
 {
 	double r = index * (sample_rate / (double)fft_size);
 	return (float)r;
-}
-
-static float vectornorm2(const complex *v, const unsigned int len)
-{
-	unsigned int i;
-	float e = 0.0f;
-	for (i = 0; i < len; i++)
-		e += std::norm(v[i]);
-	return e;
 }
 
 /*
@@ -429,7 +441,7 @@ int fcch_detector::next_norm_error(float *error)
 	 * Update gain (Normalized LMS).
 	 * Set G = 1/E for optimal convergence, with epsilon for stability.
 	 */
-	E = vectornorm2(x, m_w_len);
+	E = vectornorm2<float>(x, m_w_len);
 	if (E > 1e-10f) {
 		m_G = 1.0f / E;
 	}
@@ -453,9 +465,9 @@ int fcch_detector::next_norm_error(float *error)
 	E /= m_w_len;
 	m_e = (1.0f - m_p) * m_e + m_p * std::norm(e);
 
-	/* Return error ratio */
+	/* Return error ratio (guard against zero-energy input) */
 	if (error)
-		*error = m_e / E;
+		*error = (E > 1e-20f) ? (m_e / E) : 0.0f;
 
 	/* Remove the processed sample from the buffer */
 	m_x_cb->purge(1);

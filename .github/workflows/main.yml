@@ -32,10 +32,10 @@ jobs:
           if [ -f src/kal.cc ]; then
              V=$(grep '#define PACKAGE_VERSION' src/kal.cc | awk -F '"' '{print $2}')
           fi
-          
+
           # Fallback if not found
           if [ -z "$V" ]; then V="0.0.0"; fi
-          
+
           # RPM Release (No dashes allowed)
           SHORT_HASH="${GITHUB_SHA::7}"
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
@@ -43,7 +43,7 @@ jobs:
           else
              RPM_REL="1.git${SHORT_HASH}"
           fi
-          
+
           echo "Detected Version: $V"
           echo "version=$V" >> "$GITHUB_OUTPUT"
           echo "rpm_release=$RPM_REL" >> "$GITHUB_OUTPUT"
@@ -74,35 +74,11 @@ jobs:
             git
             zip
 
-      - name: Build SDK (hydrasdr-host)
-        shell: msys2 {0}
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-
-          # Use cygpath -m to get a Mixed (Windows-style forward slash) absolute path
-          # This avoids path resolution errors with DESTDIR on Windows.
-          STAGEDIR=$(cygpath -m "$(pwd)/../stage")
-
-          # Install directly to stage (no DESTDIR)
-          cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$STAGEDIR" \
-            -DLIBUSB_INCLUDE_DIR=/mingw64/include/libusb-1.0 \
-            ..
-
-          mingw32-make -j$(nproc)
-          mingw32-make install
-          
-          echo "SDK_ROOT=$STAGEDIR" >> $GITHUB_ENV
-          echo "Found SDK_ROOT: $STAGEDIR"
-
       - name: Build kalibrate-hydrasdr
         shell: msys2 {0}
         run: |
           mkdir build && cd build
-          cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DCMAKE_PREFIX_PATH="${SDK_ROOT}" \
-            ..
+          cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} ..
           mingw32-make -j$(nproc)
 
       - name: Package Windows Files
@@ -112,14 +88,8 @@ jobs:
           mkdir -p release/$NAME
           cp build/kal.exe release/$NAME/
 
-          # Copy required DLLs (static build only needs libusb and libhydrasdr)
+          # Copy DLLs (post-build step copies libhydrasdr.dll and libusb next to kal.exe)
           cp build/*.dll release/$NAME/ 2>/dev/null || true
-          
-          # Find and copy libhydrasdr.dll from SDK (it will be in stage/bin now)
-          find sdk_src/stage -name "libhydrasdr.dll" -exec cp {} release/$NAME/ \; 2>/dev/null || true
-          
-          # Copy libusb from MSYS2
-          cp /mingw64/bin/libusb-1.0.dll release/$NAME/ 2>/dev/null || true
 
           cp README.md release/$NAME/ 2>/dev/null || true
           # Note: We do not zip here anymore to avoid the double-zip artifact issue.
@@ -151,30 +121,20 @@ jobs:
       - uses: actions/checkout@v4
       - run: brew install cmake fftw libusb git pkg-config
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local ..
-          make -j$(sysctl -n hw.ncpu)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr/local" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
           cmake -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
-            -DCMAKE_PREFIX_PATH="${SDK_ROOT}" \
-            ..
+            -DCMAKE_INSTALL_PREFIX=/usr/local ..
           make -j$(sysctl -n hw.ncpu)
+          make install DESTDIR=$(pwd)/../pkg_root
 
       - name: Package macOS
         run: |
           NAME="kalibrate-hydrasdr-macOS-${{ matrix.arch }}-v${VERSION}"
           mkdir -p release/$NAME
-          cp build/kal release/$NAME/
-          cp "${SDK_ROOT}/lib/"*.dylib release/$NAME/ 2>/dev/null || true
+          cp pkg_root/usr/local/bin/kal release/$NAME/
+          cp -P pkg_root/usr/local/lib/libhydrasdr* release/$NAME/ 2>/dev/null || true
           cp README.md release/$NAME/ 2>/dev/null || true
           # Note: We do not tar here anymore to avoid the double-zip artifact issue.
 
@@ -208,16 +168,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y build-essential cmake libfftw3-dev libusb-1.0-0-dev debhelper fakeroot git pkg-config
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
@@ -230,15 +180,15 @@ jobs:
           PACKAGE_NAME="kalibrate-hydrasdr"
           DIST_NAME="Ubuntu-${{ matrix.version }}-LTS-${{ matrix.codename }}"
           PKG_FILENAME="${PACKAGE_NAME}-${DIST_NAME}-v${VERSION}.deb"
-          
+
           mkdir -p debian-pkg/DEBIAN debian-pkg/usr/lib debian-pkg/usr/share/doc/$PACKAGE_NAME
-          
+
           mv pkg_root/usr/bin debian-pkg/usr/
-          
-          # Copy libs (handle multiarch)
-          cp -P "${SDK_ROOT}/lib/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/x86_64-linux-gnu/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/aarch64-linux-gnu/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || true
+
+          # Copy libs from install tree (handle multiarch)
+          cp -P pkg_root/usr/lib/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/x86_64-linux-gnu/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/aarch64-linux-gnu/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || true
 
           cp README.md debian-pkg/usr/share/doc/$PACKAGE_NAME/ 2>/dev/null || true
 
@@ -286,16 +236,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: apt-get update && apt-get install -y build-essential cmake libfftw3-dev libusb-1.0-0-dev debhelper fakeroot git pkg-config
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
@@ -308,13 +248,14 @@ jobs:
           PACKAGE_NAME="kalibrate-hydrasdr"
           DIST_NAME="Debian-${{ matrix.version }}-${{ matrix.codename }}"
           PKG_FILENAME="${PACKAGE_NAME}-${DIST_NAME}-v${VERSION}.deb"
-          
+
           mkdir -p debian-pkg/DEBIAN debian-pkg/usr/lib debian-pkg/usr/share/doc/$PACKAGE_NAME
           mv pkg_root/usr/bin debian-pkg/usr/
 
-          cp -P "${SDK_ROOT}/lib/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/x86_64-linux-gnu/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/aarch64-linux-gnu/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || true
+          # Copy libs from install tree (handle multiarch)
+          cp -P pkg_root/usr/lib/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/x86_64-linux-gnu/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/aarch64-linux-gnu/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || true
 
           cp README.md debian-pkg/usr/share/doc/$PACKAGE_NAME/ 2>/dev/null || true
 
@@ -364,16 +305,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y build-essential cmake libfftw3-dev libusb-1.0-0-dev debhelper fakeroot git pkg-config
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
@@ -386,13 +317,14 @@ jobs:
           PACKAGE_NAME="kalibrate-hydrasdr"
           DIST_NAME="Linux-Mint-${{ matrix.version }}-${{ matrix.codename }}"
           PKG_FILENAME="${PACKAGE_NAME}-${DIST_NAME}-v${VERSION}.deb"
-          
+
           mkdir -p debian-pkg/DEBIAN debian-pkg/usr/lib debian-pkg/usr/share/doc/$PACKAGE_NAME
           mv pkg_root/usr/bin debian-pkg/usr/
 
-          cp -P "${SDK_ROOT}/lib/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/x86_64-linux-gnu/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/aarch64-linux-gnu/"libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || true
+          # Copy libs from install tree (handle multiarch)
+          cp -P pkg_root/usr/lib/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/x86_64-linux-gnu/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/aarch64-linux-gnu/libhydrasdr.so* debian-pkg/usr/lib/ 2>/dev/null || true
 
           cat > debian-pkg/DEBIAN/control << EOF
           Package: $PACKAGE_NAME
@@ -433,16 +365,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: dnf install -y gcc-c++ cmake fftw-devel libusb1-devel rpm-build rpmdevtools git
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
@@ -454,13 +376,13 @@ jobs:
         run: |
           PACKAGE_NAME="kalibrate-hydrasdr"
           DIST_NAME="Fedora-${{ matrix.version }}"
-          
+
           mkdir -p rpm-build/usr/bin rpm-build/usr/lib64
 
-          # Stage files
+          # Stage files from install tree
           mv pkg_root/usr/bin/* rpm-build/usr/bin/
-          cp -P "${SDK_ROOT}/lib64/"libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/"libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || true
+          cp -P pkg_root/usr/lib64/libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || true
 
           # Create tarball for rpmbuild
           tar czf rpm-build.tar.gz rpm-build
@@ -523,16 +445,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: dnf install -y gcc-c++ cmake fftw-devel libusb1-devel rpm-build rpmdevtools git
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
@@ -544,12 +456,13 @@ jobs:
         run: |
           PACKAGE_NAME="kalibrate-hydrasdr"
           DIST_NAME="AlmaLinux-9"
-          
+
           mkdir -p rpm-build/usr/bin rpm-build/usr/lib64
 
+          # Stage files from install tree
           mv pkg_root/usr/bin/* rpm-build/usr/bin/
-          cp -P "${SDK_ROOT}/lib64/"libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/"libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || true
+          cp -P pkg_root/usr/lib64/libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || true
 
           tar czf rpm-build.tar.gz rpm-build
 
@@ -610,16 +523,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: zypper install -y git gcc-c++ cmake fftw3-devel libusb-1_0-devel rpm-build
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
@@ -632,12 +535,13 @@ jobs:
           PACKAGE_NAME="kalibrate-hydrasdr"
           DIST_NAME="openSUSE-Tumbleweed"
           RPMBUILD_DIR="$PWD/rpmbuild"
-          
+
           mkdir -p rpm-build/usr/bin rpm-build/usr/lib64
 
+          # Stage files from install tree
           mv pkg_root/usr/bin/* rpm-build/usr/bin/
-          cp -P "${SDK_ROOT}/lib64/"libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || \
-          cp -P "${SDK_ROOT}/lib/"libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || true
+          cp -P pkg_root/usr/lib64/libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || \
+          cp -P pkg_root/usr/lib/libhydrasdr.so* rpm-build/usr/lib64/ 2>/dev/null || true
 
           tar czf rpm-build.tar.gz rpm-build
 
@@ -713,16 +617,6 @@ jobs:
           echo "builder ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/builder
           chmod 0440 /etc/sudoers.d/builder
 
-      - name: Build SDK
-        run: |
-          git clone https://github.com/hydrasdr/hydrasdr-host.git sdk_src
-          mkdir -p sdk_src/build && cd sdk_src/build
-          cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr ..
-          make -j$(nproc)
-          mkdir -p ../stage
-          make install DESTDIR=$(pwd)/../stage
-          echo "SDK_ROOT=$(pwd)/../stage/usr" >> $GITHUB_ENV
-
       - name: Build kalibrate-hydrasdr
         run: |
           mkdir build && cd build
@@ -735,10 +629,10 @@ jobs:
           PACKAGE_NAME="kalibrate-hydrasdr"
           DIST_NAME="Arch-Linux"
 
-          # Prepare files for packaging
+          # Prepare files for packaging from install tree
           mkdir -p arch-pkg/usr/bin arch-pkg/usr/lib
           cp pkg_root/usr/bin/* arch-pkg/usr/bin/
-          cp -P "${SDK_ROOT}/lib/"libhydrasdr.so* arch-pkg/usr/lib/ 2>/dev/null || true
+          cp -P pkg_root/usr/lib/libhydrasdr.so* arch-pkg/usr/lib/ 2>/dev/null || true
 
           # Create PKGBUILD
           cat > PKGBUILD << 'EOF'

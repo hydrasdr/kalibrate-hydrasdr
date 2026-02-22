@@ -43,16 +43,13 @@
 #define __HYDRASDR_SOURCE_H__
 
 #include <vector>
-#include <complex>
 #include <mutex>
 #include <atomic>
 #include <condition_variable>
 #include "circular_buffer.h"
+#include "kal_types.h"
 #include "dsp_resampler.h"
 #include <hydrasdr.h>
-
-/** @brief Convenience typedef for complex float samples (I/Q pairs). */
-typedef std::complex<float> complex;
 
 /**
  * @brief Native sample rate of HydraSDR RFOne hardware (Hz).

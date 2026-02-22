@@ -33,7 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#ifndef _WIN32
+#ifndef _MSC_VER
 #include <unistd.h>
 #endif
 #include <string.h>
@@ -242,65 +242,6 @@ int first_chan(int bi) {
 
 		case PCS_1900:
 			return 512;
-
-		default:
-			return -1;
-	}
-
-	return -1;
-}
-
-/**
- * @brief Loops to the next channel in a band, wrapping around if necessary.
- */
-int next_chan_loop(int chan, int bi) {
-
-	switch(bi) {
-		case GSM_850:
-			if((128 <= chan) && (chan < 251))
-				return chan + 1;
-			if(chan == 251)
-				return 128;
-			return -1;
-
-		case GSM_R_900:
-			if((955 <= chan) && (chan < 974))
-				return chan + 1;
-			if(chan == 974)
-				return 955;
-			return -1;
-
-		case GSM_900:
-			if((1 <= chan) && (chan < 124))
-				return chan + 1;
-			if(chan == 124)
-				return 1;
-			return -1;
-
-		case GSM_E_900:
-			if((0 <= chan) && (chan < 124))
-				return chan + 1;
-			if(chan == 124)
-				return 975;
-			if((975 <= chan) && (chan < 1023))
-				return chan + 1;
-			if(chan == 1023)
-				return 0;
-			return -1;
-
-		case DCS_1800:
-			if((512 <= chan) && (chan < 885))
-				return chan + 1;
-			if(chan == 885)
-				return 512;
-			return -1;
-
-		case PCS_1900:
-			if((512 <= chan) && (chan < 810))
-				return chan + 1;
-			if(chan == 810)
-				return 512;
-			return -1;
 
 		default:
 			return -1;
